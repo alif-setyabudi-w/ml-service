@@ -61,6 +61,61 @@ class NutritionKNN:
         """
         return np.sum(np.abs(x1 - x2))
 
+    def weighted_euclidean_distance(self, x1: np.ndarray, x2: np.ndarray, 
+                                    weights: np.ndarray = None) -> float:
+        """
+        Hitung Weighted Euclidean distance dengan feature weighting
+        Untuk prioritas kalori dalam rekomendasi nutrisi
+        
+        Features: [energi, protein, lemak, karbohidrat] (jika 4 features)
+                  [protein, carbs, fat] (jika 3 features - backward compatible)
+        
+        Default weights untuk 4 features: [0.50, 0.15, 0.15, 0.20]
+                                           [energi, protein, fat, carbs]
+        
+        Args:
+            x1: User nutrients array
+            x2: Food nutrients array
+            weights: Feature weights. Default: auto-set based on feature count
+            
+        Returns:
+            float: Weighted Euclidean distance
+        """
+        # Set default weights based on feature count
+        if weights is None:
+            if len(x1) == 4:
+                # Features: [energi, protein, lemak, karbohidrat]
+                weights = np.array([0.50, 0.15, 0.15, 0.20])
+            elif len(x1) == 3:
+                # Features: [protein, carbs, fat] - backward compatible (unweighted)
+                weights = np.array([0.333, 0.333, 0.334])
+            else:
+                # Default: equal weights
+                weights = np.ones(len(x1)) / len(x1)
+        
+        weights = np.array(weights)
+        weighted_diff = weights * (x1 - x2)
+        return math.sqrt(np.sum(weighted_diff ** 2))
+
+    def weighted_manhattan_distance(self, x1: np.ndarray, x2: np.ndarray,
+                                    weights: np.ndarray = None) -> float:
+        """
+        Hitung Weighted Manhattan distance dengan feature weighting
+        
+        Default weights untuk 4 features: [0.50, 0.15, 0.15, 0.20]
+        """
+        if weights is None:
+            if len(x1) == 4:
+                weights = np.array([0.50, 0.15, 0.15, 0.20])
+            elif len(x1) == 3:
+                weights = np.array([0.333, 0.333, 0.334])
+            else:
+                weights = np.ones(len(x1)) / len(x1)
+        
+        weights = np.array(weights)
+        weighted_diff = weights * np.abs(x1 - x2)
+        return np.sum(weighted_diff)
+
     def cosine_similarity(self, x1: np.ndarray, x2: np.ndarray) -> float:
         """
         Hitung Cosine similarity antara dua titik
@@ -142,21 +197,30 @@ class NutritionKNN:
         return predictions
 
     def recommend(self, user_nutrients: np.ndarray, k: int = None, 
-                  distance_metric: str = "euclidean", category_filter: str = None) -> List[Dict]:
+                  distance_metric: str = "euclidean", category_filter: str = None,
+                  use_weighted: bool = True) -> List[Dict]:
         """
         Rekomendasi top-k makanan yang paling mirip dengan kebutuhan nutrisi user
-        Menggunakan kombinasi distance-based similarity dan cosine similarity untuk hasil lebih akurat
+        LEVEL 1 Implementation: Menggunakan Weighted Distance dengan prioritas energi
         
         Args:
-            user_nutrients: Array nutrisi user [protein, carbs, fat]
+            user_nutrients: Array nutrisi user
+                           Jika 4 features: [energi_kal, protein, lemak, karbohidrat]
+                           Jika 3 features: [protein, carbs, fat]
             k: Jumlah rekomendasi (default: self.k)
             distance_metric: 'euclidean' atau 'manhattan'
             category_filter: Filter berdasarkan kategori makanan
+            use_weighted: True untuk gunakan weighted distance (LEVEL 1), False untuk unweighted
             
         Returns:
             List of dictionaries dengan informasi makanan yang direkomendasikan
         """
         k = k or self.k
+        
+        # Validasi feature count
+        n_features = len(user_nutrients)
+        if n_features not in [3, 4]:
+            raise ValueError(f"Expected 3 or 4 features, got {n_features}")
         
         # Normalisasi user nutrients
         X_train_normalized = self.normalize_features(self.X)
@@ -168,13 +232,29 @@ class NutritionKNN:
         max_distance = 0
         min_distance = float('inf')
         
+        # Set weights berdasarkan feature count
+        if use_weighted and n_features == 4:
+            # LEVEL 1: Weighted distance dengan energi sebagai prioritas
+            weights = np.array([0.50, 0.15, 0.15, 0.20])  # [energy, protein, fat, carbs]
+            print("[INFO] Using WEIGHTED distance (LEVEL 1): Energy 50%, Protein 15%, Fat 15%, Carbs 20%")
+        else:
+            # Backward compatible: unweighted distance
+            weights = np.ones(n_features) / n_features
+            print(f"[INFO] Using UNWEIGHTED distance (equal weights for {n_features} features)")
+        
         # First pass: collect distances dan find min/max untuk normalisasi
         temp_distances = []
         for i, food_nutrients in enumerate(X_train_normalized):
             if distance_metric == "euclidean":
-                dist = self.euclidean_distance(user_normalized, food_nutrients)
+                if use_weighted:
+                    dist = self.weighted_euclidean_distance(user_normalized, food_nutrients, weights)
+                else:
+                    dist = self.euclidean_distance(user_normalized, food_nutrients)
             elif distance_metric == "manhattan":
-                dist = self.manhattan_distance(user_normalized, food_nutrients)
+                if use_weighted:
+                    dist = self.weighted_manhattan_distance(user_normalized, food_nutrients, weights)
+                else:
+                    dist = self.manhattan_distance(user_normalized, food_nutrients)
             else:
                 raise ValueError(f"Unknown distance metric: {distance_metric}")
             
@@ -313,15 +393,28 @@ def load_nutrition_csv(filepath: str) -> Tuple[np.ndarray, List[str], List[str],
         print(f"[OK] CSV loaded successfully. Shape: {df.shape}")
         print(f"[OK] Columns: {list(df.columns)}")
         
-        # Extract features dengan nama kolom yang sesuai
-        feature_cols = ['protein_g', 'lemak_g', 'karbohidrat_g']
+        # Extract features - dengan energi sebagai feature pertama (LEVEL 1 Weighted KNN)
+        # Priority: Include energy jika ada untuk weighted distance calculation
+        feature_cols = []
+        feature_names_list = []
+        
+        if 'energi_kal' in df.columns:
+            feature_cols.append('energi_kal')
+            feature_names_list.append('energi_kal')
+            print("[OK] Energy column found - will use weighted distance (LEVEL 1)")
+        
+        feature_cols.extend(['protein_g', 'lemak_g', 'karbohidrat_g'])
+        feature_names_list.extend(['protein_g', 'lemak_g', 'karbohidrat_g'])
         
         # Verify kolom ada
         missing_cols = [col for col in feature_cols if col not in df.columns]
         if missing_cols:
             print(f"[ERROR] Missing columns: {missing_cols}")
             print(f"[ERROR] Available columns: {list(df.columns)}")
-            raise ValueError(f"Missing required columns: {missing_cols}")
+            # Fallback: gunakan tanpa energi
+            feature_cols = ['protein_g', 'lemak_g', 'karbohidrat_g']
+            feature_names_list = ['protein_g', 'lemak_g', 'karbohidrat_g']
+            print("[WARN] Falling back to 3 features (no energy)")
         
         # Convert features to float and handle any non-numeric values
         for col in feature_cols:
@@ -335,8 +428,8 @@ def load_nutrition_csv(filepath: str) -> Tuple[np.ndarray, List[str], List[str],
         # Extract categories if exists
         categories = df['kategori'].fillna('all').values.tolist() if 'kategori' in df.columns else None
         
-        print(f"[OK] Loaded {len(X)} food items with {len(feature_cols)} features")
-        return X, y, feature_cols, categories
+        print(f"[OK] Loaded {len(X)} food items with {len(feature_cols)} features: {feature_names_list}")
+        return X, y, feature_names_list, categories
     except Exception as e:
         print(f"[ERROR] Error loading CSV: {str(e)}")
         import traceback

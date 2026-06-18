@@ -94,12 +94,20 @@ def health():
 def recommend():
     """
     Rekomendasi makanan berdasarkan kebutuhan nutrisi user
+    LEVEL 1 Implementation: Weighted KNN Distance dengan prioritas energi
     
     Request body:
     {
-        "nutrients": [protein, carbohydrate, fat],
-        "k": 5,  # optional, default 5
-        "distance_metric": "euclidean"  # optional
+        "nutrients": [energi_kal, protein_g, lemak_g, karbohidrat_g],  // 4 features untuk weighted
+        "k": 7,
+        "distance_metric": "euclidean",
+        "use_weighted": true  // Optional, default true jika 4 features
+    }
+    
+    Backward Compatible:
+    {
+        "nutrients": [protein_g, carbohydrate_g, fat_g],  // 3 features untuk unweighted
+        "k": 5
     }
     """
     try:
@@ -121,22 +129,33 @@ def recommend():
             }), 400
         
         nutrients = data.get('nutrients')
-        k = data.get('k', 5)
+        k = data.get('k', 7)
         distance_metric = data.get('distance_metric', 'euclidean')
+        use_weighted = data.get('use_weighted', None)  # Auto-detect if not specified
         
-        # Validate input
-        if not isinstance(nutrients, list) or len(nutrients) != 3:
+        # Validate input - accept 3 or 4 features
+        if not isinstance(nutrients, list) or len(nutrients) not in [3, 4]:
             return jsonify({
                 "success": False,
-                "message": f"Nutrients should be a list of 3 values [protein, carbs, fat]"
+                "message": f"Nutrients should be a list of 3 or 4 values. Got {len(nutrients)} values."
             }), 400
+        
+        # Auto-detect weighted mode based on feature count
+        if use_weighted is None:
+            use_weighted = (len(nutrients) == 4)
         
         # Get recommendations
         user_nutrients = np.array(nutrients, dtype=float)
-        recommendations = model.recommend(user_nutrients, k=k, distance_metric=distance_metric)
+        recommendations = model.recommend(user_nutrients, k=k, distance_metric=distance_metric,
+                                         use_weighted=use_weighted)
+        
+        # Add mode info to response
+        mode_info = "WEIGHTED (LEVEL 1: Energy 50%, Protein 15%, Fat 15%, Carbs 20%)" if use_weighted else "UNWEIGHTED"
         
         return jsonify({
             "success": True,
+            "mode": mode_info,
+            "feature_count": len(nutrients),
             "user_requirements": dict(zip(feature_names, nutrients)),
             "recommendations": recommendations,
             "count": len(recommendations)
