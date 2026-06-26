@@ -131,26 +131,21 @@ def recommend():
         nutrients = data.get('nutrients')
         k = data.get('k', 7)
         distance_metric = data.get('distance_metric', 'euclidean')
-        use_weighted = data.get('use_weighted', None)  # Auto-detect if not specified
+        distance_metric = data.get('distance_metric', 'euclidean')
         
-        # Validate input - accept 3 or 4 features
-        if not isinstance(nutrients, list) or len(nutrients) not in [3, 4]:
+        # Validate input - accept 3 features
+        if not isinstance(nutrients, list) or len(nutrients) != 3:
             return jsonify({
                 "success": False,
-                "message": f"Nutrients should be a list of 3 or 4 values. Got {len(nutrients)} values."
+                "message": f"Nutrients should be a list of 3 values. Got {len(nutrients)} values."
             }), 400
-        
-        # Auto-detect weighted mode based on feature count
-        if use_weighted is None:
-            use_weighted = (len(nutrients) == 4)
         
         # Get recommendations
         user_nutrients = np.array(nutrients, dtype=float)
-        recommendations = model.recommend(user_nutrients, k=k, distance_metric=distance_metric,
-                                         use_weighted=use_weighted)
+        recommendations = model.recommend(user_nutrients, k=k, distance_metric=distance_metric)
         
         # Add mode info to response
-        mode_info = "WEIGHTED (LEVEL 1: Energy 50%, Protein 15%, Fat 15%, Carbs 20%)" if use_weighted else "UNWEIGHTED"
+        mode_info = "UNWEIGHTED (Standard Euclidean)"
         
         return jsonify({
             "success": True,
